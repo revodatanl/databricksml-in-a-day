@@ -29,7 +29,7 @@ mlflow.set_registry_uri("databricks-uc")
 
 CATALOG_NAME = "ml_training"
 SCHEMA_NAME = "models"
-USERNAME = 'magdalena_brach'
+USERNAME = dbutils.notebook.entry_point.getDbutils().notebook().getContext().userName().get().split('@')[0].replace('.', '_')
 
 # COMMAND ----------
 
