@@ -14,7 +14,27 @@
 # MAGIC The example uses a dataset from the UCI Machine Learning Repository, presented in [*Modeling wine preferences by data mining from physicochemical properties*](https://www.sciencedirect.com/science/article/pii/S0167923609001377?via%3Dihub) [Cortez et al., 2009].
 # MAGIC
 # MAGIC ## Requirements
-# MAGIC This notebook requires Databricks Runtime for Machine Learning.
+# MAGIC This notebook requires Databricks Runtime for Machine Learning. This notebook requires a workspace that has been enabled for Unity Catalog. 
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Unity Catalog setup
+
+# COMMAND ----------
+
+import mlflow
+
+mlflow.set_registry_uri("databricks-uc")
+
+CATALOG_NAME = "ml_training"
+SCHEMA_NAME = "models"
+USERNAME = dbutils.notebook.entry_point.getDbutils().notebook().getContext().userName().get().split('@')[0].replace('.', '_')
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Read the data
 
 # COMMAND ----------
 
@@ -73,7 +93,7 @@ data.quality = high_quality
 
 # COMMAND ----------
 
-# MAGIC %md Box plots are useful in noticing correlations between features and a binary label.
+# MAGIC %md Box plots are useful in noticing correlations between features and a binary label. Create box plots for each feature to compare high-quality and low-quality wines. Significant differences in the box plots indicate good predictors of quality.
 
 # COMMAND ----------
 
@@ -151,13 +171,11 @@ import sklearn
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import roc_auc_score
 
-import mlflow
 import mlflow.pyfunc
 import mlflow.sklearn
 from mlflow.models.signature import infer_signature
 from mlflow.utils.environment import _mlflow_conda_env
 
-mlflow.set_registry_uri("databricks-uc")
 
 # The predict method of sklearn's RandomForestClassifier returns a binary classification (0 or 1). 
 # The following code creates a wrapper function, SklearnModelWrapper, that uses 
@@ -174,7 +192,7 @@ class SklearnModelWrapper(mlflow.pyfunc.PythonModel):
 # Within the context, you call mlflow.log_param to keep track of the parameters used, and
 # mlflow.log_metric to record metrics like accuracy.
 with mlflow.start_run(run_name='untuned_random_forest'):
-  n_estimators = 10
+  n_estimators = 10   #The number of trees in the forest.
   model = RandomForestClassifier(n_estimators=n_estimators, random_state=np.random.RandomState(123))
   model.fit(X_train, y_train)
 
@@ -216,9 +234,9 @@ feature_importances.sort_values('importance', ascending=False)
 
 # COMMAND ----------
 
-# MAGIC %md #### Register the model in MLflow Model Registry
+# MAGIC %md #### Register the model in MLflow UC Model Registry
 # MAGIC
-# MAGIC By registering this model in Model Registry, you can easily reference the model from anywhere within Databricks.
+# MAGIC By registering this model in UC Model Registry, you can easily reference the model from anywhere within Databricks.
 # MAGIC
 # MAGIC The following section shows how to do this programmatically, but you can also register a model using the UI. See "Create or register a model using the UI" ([AWS](https://docs.databricks.com/applications/machine-learning/manage-model-lifecycle/index.html#create-or-register-a-model-using-the-ui)|[Azure](https://docs.microsoft.com/azure/databricks/applications/machine-learning/manage-model-lifecycle/index#create-or-register-a-model-using-the-ui)|[GCP](https://docs.gcp.databricks.com/applications/machine-learning/manage-model-lifecycle/index.html#create-or-register-a-model-using-the-ui)).
 
@@ -231,11 +249,9 @@ run_id = mlflow.search_runs(filter_string='tags.mlflow.runName = "untuned_random
 # If you see the error "PERMISSION_DENIED: User does not have any permission level assigned to the registered model", 
 # the cause may be that a model already exists with the name "wine_quality". Try using a different name.
 
-catalog_name = "ml_training"
-schema_name = "models"
-model_name = "wine_quality"
+model_name = f"{CATALOG_NAME}.{SCHEMA_NAME}.{USERNAME}_wine_quality"
 
-model_version = mlflow.register_model(f"runs:/{run_id}/random_forest_model", f"{catalog_name}.{schema_name}.{model_name}")
+model_version = mlflow.register_model(f"runs:/{run_id}/random_forest_model", f"{model_name}")
 
 # Registering the model takes a few seconds, so add a small delay
 time.sleep(15)
@@ -252,21 +268,21 @@ from mlflow.tracking import MlflowClient
 
 client = MlflowClient()
 
-client.set_registered_model_tag(f"{catalog_name}.{schema_name}.{model_name}", "task", "classification")
+client.set_registered_model_tag(f"{model_name}", "task", "classification")
 
-client.set_registered_model_alias(f"{catalog_name}.{schema_name}.{model_name}", "Champion", 1)
+client.set_registered_model_alias(f"{model_name}", "Champion", 1)
 
-client.set_model_version_tag(f"{catalog_name}.{schema_name}.{model_name}", "1", "validation_status", "approved")
+client.set_model_version_tag(f"{model_name}", "1", "validation_status", "approved")
 
 # COMMAND ----------
 
-# MAGIC %md The Models page now shows the model version in stage "Production".
+# MAGIC %md In Unity Catalog, the model version now has the tag "Champion".
 # MAGIC
-# MAGIC You can now refer to the model using the path "models:/wine_quality/production".
+# MAGIC You can now refer to the model using the path "models:/{model_name}@Champion".
 
 # COMMAND ----------
 
-model = mlflow.pyfunc.load_model(f"models:/{catalog_name}.{schema_name}.{model_name}@Champion")
+model = mlflow.pyfunc.load_model(f"models:/{model_name}@Champion")
 
 # Sanity-check: This should match the AUC logged by MLflow
 print(f'AUC: {roc_auc_score(y_test, model.predict(X_test))}')
@@ -276,9 +292,7 @@ print(f'AUC: {roc_auc_score(y_test, model.predict(X_test))}')
 # MAGIC %md ##Experiment with a new model
 # MAGIC
 # MAGIC The random forest model performed well even without hyperparameter tuning.
-# MAGIC
-# MAGIC The following code uses the xgboost library to train a more accurate model. It runs a parallel hyperparameter sweep to train multiple
-# MAGIC models in parallel, using Hyperopt and SparkTrials. As before, the code tracks the performance of each parameter configuration with MLflow.
+# MAGIC Use the xgboost library to train a more accurate model. Run a hyperparameter sweep to train multiple models in parallel, using Hyperopt and SparkTrials. As before, MLflow tracks the performance of each parameter configuration.
 
 # COMMAND ----------
 
@@ -326,7 +340,7 @@ def train_model(params):
 
 # Greater parallelism will lead to speedups, but a less optimal hyperparameter sweep. 
 # A reasonable value for parallelism is the square root of max_evals.
-spark_trials = SparkTrials(parallelism=4)
+spark_trials = SparkTrials(parallelism=5)
 
 # Run fmin within an MLflow run context so that each hyperparameter configuration is logged as a child run of a parent
 # run called "xgboost_models" .
@@ -378,7 +392,7 @@ print(f'AUC of Best Run: {best_run["metrics.auc"]}')
 
 # COMMAND ----------
 
-new_model_version = mlflow.register_model(f"runs:/{best_run.run_id}/model", f"{catalog_name}.{schema_name}.{model_name}")
+new_model_version = mlflow.register_model(f"runs:/{best_run.run_id}/model", f"{model_name}")
 
 # Registering the model takes a few seconds, so add a small delay
 time.sleep(15)
@@ -391,11 +405,11 @@ time.sleep(15)
 
 # COMMAND ----------
 
-client.set_registered_model_alias(f"{catalog_name}.{schema_name}.{model_name}", "champion", 2)
+client.set_registered_model_alias(f"{model_name}", "champion", 2)
 
 # COMMAND ----------
 
-client.set_registered_model_alias(f"{catalog_name}.{schema_name}.{model_name}", "archived", 1)
+client.set_registered_model_alias(f"{model_name}", "archived", 1)
 
 # COMMAND ----------
 
@@ -404,7 +418,7 @@ client.set_registered_model_alias(f"{catalog_name}.{schema_name}.{model_name}", 
 # COMMAND ----------
 
 # This code is the same as the last block of "Building a Baseline Model". No change is required for clients to get the new model!
-model = mlflow.pyfunc.load_model(f"models:/{catalog_name}.{schema_name}.{model_name}@champion")
+model = mlflow.pyfunc.load_model(f"models:/{model_name}@champion")
 print(f'AUC: {roc_auc_score(y_test, model.predict(X_test))}')
 
 # COMMAND ----------
@@ -425,12 +439,15 @@ print(f'AUC: {roc_auc_score(y_test, model.predict(X_test))}')
 # In the real world, this would be a new batch of data.
 spark_df = spark.createDataFrame(X_train)
 
-# Replace <username> with your username before running this cell.
-table_path = "dbfs:/kornelkovacs/delta/wine_data"
+table_name = f"{CATALOG_NAME}.batch_data.{USERNAME}_wine_data"
 
-# Delete the contents of this path in case this cell has already been run
-dbutils.fs.rm(table_path, True)
-spark_df.write.format("delta").save(table_path)
+(spark_df
+  .write
+  .format("delta")
+  .mode("overwrite")
+  .option("overwriteSchema",True)
+  .saveAsTable(table_name)
+)
 
 # COMMAND ----------
 
@@ -440,12 +457,12 @@ spark_df.write.format("delta").save(table_path)
 
 import mlflow.pyfunc
 
-apply_model_udf = mlflow.pyfunc.spark_udf(spark, f"models:/{catalog_name}.{schema_name}.{model_name}@champion")
+apply_model_udf = mlflow.pyfunc.spark_udf(spark, f"models:/{model_name}@champion")
 
 # COMMAND ----------
 
-# Read the "new data" from Delta
-new_data = spark.read.format("delta").load(table_path)
+# Read the "new data" from the Unity Catalog table
+new_data = spark.read.table(f"{CATALOG_NAME}.batch_data.{USERNAME}_wine_data")
 
 # COMMAND ----------
 
@@ -465,8 +482,34 @@ new_data = new_data.withColumn(
 
 # COMMAND ----------
 
-# Each row now has an associated prediction. 
+# Each row now has an associated prediction. Note that the xgboost function does not output probabilities by default, so the predictions are not limited to the range [0, 1].
 display(new_data)
+
+# COMMAND ----------
+
+# MAGIC %md
+# MAGIC ## Serve the model
+# MAGIC To productionize the model for low latency predictions, use Mosaic AI Model Serving to deploy the model to an endpoint. The following cell shows how to use the MLflow Deployments SDK to create a model serving endpoint
+
+# COMMAND ----------
+
+# from mlflow.deployments import get_deploy_client
+
+# client = get_deploy_client("databricks")
+# endpoint = client.create_endpoint(
+#     name="wine-model-endpoint",
+#     config={
+#         "served_entities": [
+#             {
+#                 "name": "wine-entity",
+#                 "entity_name": model_name,
+#                 "entity_version": "1",
+#                 "workload_size": "Small",
+#                 "scale_to_zero_enabled": True
+#             }
+#         ],
+#       }
+# )
 
 # COMMAND ----------
 
@@ -476,6 +519,6 @@ display(new_data)
 
 versions=[1, 2]
 for version in versions:
-  client.delete_model_version(name=f"{catalog_name}.{schema_name}.{model_name}", version=version)
+  client.delete_model_version(name=f"{model_name}", version=version)
 
-client.delete_registered_model(name=f"{catalog_name}.{schema_name}.{model_name}")
+client.delete_registered_model(name=f"{model_name}")
