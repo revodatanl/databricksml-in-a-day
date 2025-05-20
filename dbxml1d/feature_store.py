@@ -251,7 +251,30 @@ train_model(X_train, X_test, y_train, y_test, training_set, fe)
 
 # COMMAND ----------
 
-display(inference_data_df.drop("quality"))
+# Helper function
+def get_latest_model_version(model_name):
+    latest_version = 1
+    mlflow_client = MlflowClient()
+    for mv in mlflow_client.search_model_versions(f"name='{model_name}'"):
+        version_int = int(mv.version)
+        if version_int > latest_version:
+            latest_version = version_int
+    return latest_version
+
+# COMMAND ----------
+
+## For simplicity, this example uses inference_data_df as input data for prediction
+batch_input_df = inference_data_df.drop("quality") # Drop the label column
+
+latest_model_version = get_latest_model_version(model_name)
+
+predictions_df = fe.score_batch(model_uri=f"models:/{model_name}/{latest_model_version}", df=batch_input_df)
+
+display(predictions_df["wine_id", "prediction"])
+
+# COMMAND ----------
+
+display(batch_input_df)
 
 # COMMAND ----------
 
